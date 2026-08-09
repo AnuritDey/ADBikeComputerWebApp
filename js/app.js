@@ -46,9 +46,12 @@ if (!navigator.bluetooth) {
 const mapController = createMapController('map', { onPointsChanged: handlePointsChanged });
 
 function handlePointsChanged({ startPoint, endPoint }) {
+  stopTelemetry();        // NEW — a pin move always invalidates the active ride
   currentRoute = null;
+  currentFrame = null;
   updateStats(null);
   sendBtn.disabled = true;
+  startRideBtn.disabled = true; // NEW
 
   if (!startPoint) {
     instructionsEl.innerHTML = 'Tap the map to set your <strong class="text-start">start</strong> point.';
@@ -275,6 +278,7 @@ async function stopTelemetry() {
   smoothedHeading = null;         // NEW — reset alongside lastFix
   startRideBtn.disabled = false;
   stopRideBtn.disabled = true;
+  sendBtn.disabled = false; // NEW
 }
 
 startRideBtn.addEventListener('click', startTelemetry);
