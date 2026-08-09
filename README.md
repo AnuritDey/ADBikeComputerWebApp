@@ -5,29 +5,39 @@ step — this is the primary path for real rides going forward; the laptop
 + Python `companion_app/` is now mainly useful as an offline dev/testing
 tool (see its README).
 
-## Current status: Phase 2 — BLE connect + send route
+## Current status: Phase 3 — live GPS telemetry while riding
 
-What works now: plan a route (phase 1), then tap **Send to Bike Computer**
-— it opens Chrome's device picker, connects to the M5Stack over Web
-Bluetooth, and sends the route using the exact same binary protocol
-`companion_app/ble_transport.py` used. No firmware changes were needed —
-`js/protocol.js` is a byte-for-byte port of `protocol.py`.
+Full loop now works: plan a route, send it to the M5Stack, tap **Start
+Ride**, and it streams live position + heading from your phone's GPS to
+the firmware in real time, using the browser's Geolocation API
+(`navigator.geolocation.watchPosition`).
 
-A few things worth knowing:
-- **The M5Stack must be powered on and advertising** before you tap Send
-  — if it's not visible in the device picker, check it's booted and
-  showing "Waiting for BLE...".
-- **Tapping Send must be a direct user action** (not, say, triggered from
-  a timer) — this is a Web Bluetooth requirement, not a bug, and the code
-  already respects it.
-- Side-street stubs still aren't sent (always an empty list) — same
-  trade-off noted in phase 1, unaffected by this phase.
-- Once connected, tapping Send again reuses the existing connection
-  rather than reconnecting from scratch.
+A few implementation details worth knowing:
+- **Heading** comes from consecutive GPS fixes (a great-circle bearing
+  calculation), smoothed with an exponential filter tuned for angle
+  wraparound (so e.g. drifting from 350\u00b0 to 10\u00b0 moves the short way
+  through 0\u00b0, not the long way through 180\u00b0) -- this avoids the jittery
+  heading you'd get from raw consecutive-fix bearings alone.
+- **Weak fixes are filtered**: any GPS reading with accuracy worse than
+  25m is skipped rather than sent, so a bad fix under trees or between
+  buildings doesn't jerk the M5Stack's marker around.
+- **Screen wake lock**: the phone screen is kept on for the duration of
+  a ride (`navigator.wakeLock`) -- without this, Android will eventually
+  sleep the screen and pause the page, which stops GPS updates and can
+  drop the BLE connection.
+- **In-flight write guard**: if a new GPS fix arrives before the
+  previous telemetry packet finished sending over BLE, the new fix is
+  dropped rather than queued -- keeps the M5Stack showing your most
+  recent position instead of catching up through a backlog of stale ones.
+- Moving a start/end pin, or a BLE disconnect, automatically stops an
+  active ride (releases the wake lock, clears the GPS watch) rather than
+  leaving it running against stale state.
 
-Not built yet: live GPS streaming while riding (phase 3) — right now,
-after the map arrives, the M5Stack will sit on "Map Loaded!" since it has
-no telemetry yet to draw a live position with.
+**Foreground only, for now**: this all depends on the browser tab
+staying open and visible. Backgrounding the tab (switching apps, locking
+the phone) will pause geolocation updates and likely drop the BLE
+connection -- keep the phone mounted and the screen on during a ride
+until a background-friendly approach is worth the added complexity.
 
 ## Running it
 
@@ -64,14 +74,20 @@ webapp/
 ├── manifest.json       # PWA metadata (Add to Home Screen)
 ├── css/style.css        # dark instrument-panel theme, matches firmware's own look
 └── js/
-    ├── app.js            # entry point: wires DOM <-> map <-> routing <-> BLE
+    ├── app.js            # entry point: wires DOM <-> map <-> routing <-> BLE <-> live GPS
     ├── config.js          # shared constants -- BLE UUIDs, COORD_SCALE (mirrors config.py/config.h)
     ├── map.js              # Leaflet setup, tap-to-place pins, route drawing
     ├── routing.js           # OSRM API call, no DOM/map knowledge
     ├── geo.js                # lat/lon -> local (x,y) meters conversion
     ├── protocol.js            # binary packet encoding, ports protocol.py byte-for-byte
-    └── ble.js                  # Web Bluetooth connect + chunked send, ports ble_transport.py
+    └── ble.js                  # Web Bluetooth connect + chunked send + telemetry, ports ble_transport.py
 ```
+
+Note: live-telemetry logic (GPS watch, bearing/smoothing, wake lock) lives
+directly in `app.js` rather than a separate module -- a deliberate
+departure from the one-module-per-concern split elsewhere in this
+project. Worth splitting into its own `telemetry.js` if it grows much
+further (e.g. once ride stats or off-route detection get added on top).
 
 Same philosophy as the Python side: each file does one job, so a bug in
 routing (wrong route shape) and a bug in the map (pins in the wrong
@@ -79,11 +95,8 @@ place) are easy to tell apart.
 
 ## Roadmap
 
-- **Phase 3 — live telemetry**: `navigator.geolocation.watchPosition` to
-  replace the phone-relay hack entirely; heading from GPS-derived bearing,
-  same approach as `companion_app/telemetry_live.py`. `protocol.js` already
-  has `buildTelemetryPacket()` ready for this.
 - **Phase 4 — ride stats & navigation**: live speed/distance/ETA,
-  off-route detection, upcoming-turn cues.
+  off-route detection, upcoming-turn cues. The telemetry strip and
+  `buildTelemetryPacket()` are both already in place to build on.
 - **Phase 5 — history**: save completed rides, GPX export, saved/favorite
   routes so you're not re-planning the same commute every time.

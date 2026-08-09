@@ -12,7 +12,7 @@ const instructionsEl = document.getElementById('instructions');
 const distanceEl = document.getElementById('stat-distance');
 const timeEl = document.getElementById('stat-time');
 const pointsEl = document.getElementById('stat-points');
-const statusEl = document.getElementById('telemetry-status');
+const statusEl = document.getElementById('telemetry-status'); // small pulse dot -- route-planned indicator only
 const planBtn = document.getElementById('plan-btn');
 const resetBtn = document.getElementById('reset-btn');
 const locateBtn = document.getElementById('locate-btn');
@@ -21,16 +21,16 @@ const sendBtn = document.getElementById('send-btn');
 const bleStatusEl = document.getElementById('ble-status');
 const startRideBtn = document.getElementById('start-ride-btn');
 const stopRideBtn = document.getElementById('stop-ride-btn');
+const rideStatusEl = document.getElementById('ride-status');
 
 let currentRoute = null; // { coordinates, distanceM, durationS } once planned
 let toastTimer = null;
 let currentFrame = null;     // local frame for this route
 let telemetryWatchId = null; // geolocation watch handle
 let lastFix = null;
-let sending = false;        // NEW — in-flight BLE write guard
-let smoothedHeading = null; // NEW — for heading smoothing
-let wakeLock = null;        // NEW — screen wake lock handle
-
+let sending = false;        // in-flight BLE write guard, drop a fix rather than queue it
+let smoothedHeading = null; // exponential heading smoothing state
+let wakeLock = null;        // screen wake lock handle, held while a ride is active
 
 const ble = new BleConnection();
 ble.onDisconnected = () => {
@@ -46,12 +46,12 @@ if (!navigator.bluetooth) {
 const mapController = createMapController('map', { onPointsChanged: handlePointsChanged });
 
 function handlePointsChanged({ startPoint, endPoint }) {
-  stopTelemetry();        // NEW — a pin move always invalidates the active ride
+  stopTelemetry();        // a pin move always invalidates the active ride
   currentRoute = null;
   currentFrame = null;
   updateStats(null);
   sendBtn.disabled = true;
-  startRideBtn.disabled = true; // NEW
+  startRideBtn.disabled = true;
 
   if (!startPoint) {
     instructionsEl.innerHTML = 'Tap the map to set your <strong class="text-start">start</strong> point.';
@@ -136,9 +136,6 @@ locateBtn.addEventListener('click', () => {
   mapController.locateMe();
 });
 
-
-
-
 sendBtn.addEventListener('click', async () => {
   if (!currentRoute) return;
 
@@ -170,9 +167,7 @@ sendBtn.addEventListener('click', async () => {
   } finally {
     sendBtn.disabled = false;
   }
-}
-);
-
+});
 
 function computeBearing(fromLat, fromLon, toLat, toLon) {
   const φ1 = (fromLat * Math.PI) / 180;
@@ -194,7 +189,6 @@ function smoothBearing(newHeading) {
   return smoothedHeading;
 }
 
-// NEW
 async function requestWakeLock() {
   try {
     wakeLock = await navigator.wakeLock.request('screen');
@@ -218,22 +212,22 @@ async function startTelemetry() {
     return;
   }
 
-  statusEl.textContent = 'Live GPS: starting…';
-  statusEl.classList.add('is-live');
+  rideStatusEl.textContent = 'Live GPS: starting\u2026';
   lastFix = null;
-  smoothedHeading = null;   // NEW — reset from any previous ride
+  smoothedHeading = null;   // reset from any previous ride
   startRideBtn.disabled = true;
   stopRideBtn.disabled = false;
+  sendBtn.disabled = true;  // avoid an accidental resend interrupting the M5Stack mid-ride
 
-  await requestWakeLock();  // NEW — must come after button state, before watchPosition
+  await requestWakeLock();  // must come after button state, before watchPosition
 
   telemetryWatchId = navigator.geolocation.watchPosition(
     async (pos) => {
-      if (sending) return;              // NEW — rate-limit guard, first line in callback
+      if (sending) return;              // rate-limit guard, first line in callback
       sending = true;
       try {
-        if (pos.coords.accuracy > 25) { // NEW — accuracy filter, right after entering try
-          statusEl.textContent = `Live GPS: weak fix (±${Math.round(pos.coords.accuracy)}m)`;
+        if (pos.coords.accuracy > 25) { // accuracy filter, right after entering try
+          rideStatusEl.textContent = `Live GPS: weak fix (\u00b1${Math.round(pos.coords.accuracy)}m)`;
           return;
         }
 
@@ -242,22 +236,22 @@ async function startTelemetry() {
         const { x, y } = currentFrame.toLocal(lat, lon);
 
         const rawHeading = lastFix ? computeBearing(lastFix.lat, lastFix.lon, lat, lon) : 0;
-        const headingDeg = lastFix ? smoothBearing(rawHeading) : 0; // NEW — smoothing applied here
+        const headingDeg = lastFix ? smoothBearing(rawHeading) : 0; // smoothing applied here
         lastFix = { lat, lon };
 
         await ble.sendTelemetry(x, y, headingDeg);
-        statusEl.textContent = 'Live GPS: streaming…';
+        rideStatusEl.textContent = 'Live GPS: streaming\u2026';
       } catch (err) {
         console.error(err);
-        statusEl.textContent = 'Live GPS: send error';
+        rideStatusEl.textContent = 'Live GPS: send error';
       } finally {
-        sending = false;                // NEW — always release the guard
+        sending = false;                // always release the guard
       }
     },
     (err) => {
       console.error(err);
       showToast(err.message || 'GPS error while riding.', true);
-      statusEl.textContent = 'Live GPS: error';
+      rideStatusEl.textContent = 'Live GPS: error';
     },
     { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
   );
@@ -268,17 +262,16 @@ async function stopTelemetry() {
     navigator.geolocation.clearWatch(telemetryWatchId);
     telemetryWatchId = null;
   }
-  if (wakeLock) {                 // NEW
+  if (wakeLock) {
     await wakeLock.release();
     wakeLock = null;
   }
-  statusEl.textContent = 'Live GPS: stopped';
-  statusEl.classList.remove('is-live');
+  rideStatusEl.textContent = 'Live GPS: stopped';
   lastFix = null;
-  smoothedHeading = null;         // NEW — reset alongside lastFix
+  smoothedHeading = null;         // reset alongside lastFix
   startRideBtn.disabled = false;
   stopRideBtn.disabled = true;
-  sendBtn.disabled = false; // NEW
+  sendBtn.disabled = false;
 }
 
 startRideBtn.addEventListener('click', startTelemetry);

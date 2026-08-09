@@ -57,9 +57,15 @@
 
     <div class="ble-row">
       <button id="send-btn" class="btn btn-outline" disabled>Send to Bike Computer</button>
-      <button id="start-ride-btn" disabled>Start Ride</button>
-      <button id="stop-ride-btn" disabled>Stop Ride</button>
       <span class="ble-status" id="ble-status">Not connected</span>
+    </div>
+
+    <div class="ride-row">
+      <div class="ride-buttons">
+        <button id="start-ride-btn" class="btn btn-primary" disabled>Start Ride</button>
+        <button id="stop-ride-btn" class="btn btn-danger" disabled>Stop Ride</button>
+      </div>
+      <span class="ride-status" id="ride-status"></span>
     </div>
   </section>
 

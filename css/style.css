@@ -257,6 +257,15 @@ html, body {
   border-color: var(--border);
   cursor: not-allowed;
 }
+.btn-danger {
+  background: var(--accent-end);
+  color: #2A0A0B;
+}
+.btn-danger:disabled {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
 
 .ble-row {
   margin-top: 10px;
@@ -270,6 +279,25 @@ html, body {
   letter-spacing: 0.04em;
   color: var(--text-muted);
   text-align: center;
+}
+
+.ride-row {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ride-buttons {
+  display: flex;
+  gap: 10px;
+}
+.ride-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  text-align: center;
+  min-height: 14px; /* reserve the line so the layout doesn't jump as status text appears */
 }
 
 @media (min-width: 640px) {
