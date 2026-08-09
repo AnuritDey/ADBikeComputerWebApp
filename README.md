@@ -5,14 +5,29 @@ step — this is the primary path for real rides going forward; the laptop
 + Python `companion_app/` is now mainly useful as an offline dev/testing
 tool (see its README).
 
-## Current status: Phase 1 — route planning
+## Current status: Phase 2 — BLE connect + send route
 
-What works right now: tap the map to set a start and end point, get a
-real cycling route back (via OSRM), see it drawn on the map with
-distance/time/point-count stats.
+What works now: plan a route (phase 1), then tap **Send to Bike Computer**
+— it opens Chrome's device picker, connects to the M5Stack over Web
+Bluetooth, and sends the route using the exact same binary protocol
+`companion_app/ble_transport.py` used. No firmware changes were needed —
+`js/protocol.js` is a byte-for-byte port of `protocol.py`.
 
-Not built yet (see the roadmap at the bottom): connecting to the
-M5Stack, sending the route over BLE, live GPS streaming while riding.
+A few things worth knowing:
+- **The M5Stack must be powered on and advertising** before you tap Send
+  — if it's not visible in the device picker, check it's booted and
+  showing "Waiting for BLE...".
+- **Tapping Send must be a direct user action** (not, say, triggered from
+  a timer) — this is a Web Bluetooth requirement, not a bug, and the code
+  already respects it.
+- Side-street stubs still aren't sent (always an empty list) — same
+  trade-off noted in phase 1, unaffected by this phase.
+- Once connected, tapping Send again reuses the existing connection
+  rather than reconnecting from scratch.
+
+Not built yet: live GPS streaming while riding (phase 3) — right now,
+after the map arrives, the M5Stack will sit on "Map Loaded!" since it has
+no telemetry yet to draw a live position with.
 
 ## Running it
 
@@ -49,9 +64,13 @@ webapp/
 ├── manifest.json       # PWA metadata (Add to Home Screen)
 ├── css/style.css        # dark instrument-panel theme, matches firmware's own look
 └── js/
-    ├── app.js            # entry point: wires DOM <-> map <-> routing
-    ├── map.js             # Leaflet setup, tap-to-place pins, route drawing
-    └── routing.js          # OSRM API call, no DOM/map knowledge
+    ├── app.js            # entry point: wires DOM <-> map <-> routing <-> BLE
+    ├── config.js          # shared constants -- BLE UUIDs, COORD_SCALE (mirrors config.py/config.h)
+    ├── map.js              # Leaflet setup, tap-to-place pins, route drawing
+    ├── routing.js           # OSRM API call, no DOM/map knowledge
+    ├── geo.js                # lat/lon -> local (x,y) meters conversion
+    ├── protocol.js            # binary packet encoding, ports protocol.py byte-for-byte
+    └── ble.js                  # Web Bluetooth connect + chunked send, ports ble_transport.py
 ```
 
 Same philosophy as the Python side: each file does one job, so a bug in
@@ -60,13 +79,10 @@ place) are easy to tell apart.
 
 ## Roadmap
 
-- **Phase 2 — BLE connect + send route**: `js/ble.js` using
-  `navigator.bluetooth`, reusing the exact binary protocol from
-  `companion_app/protocol.py` (reimplemented in JS) so the firmware
-  doesn't need to change at all.
 - **Phase 3 — live telemetry**: `navigator.geolocation.watchPosition` to
   replace the phone-relay hack entirely; heading from GPS-derived bearing,
-  same approach as `companion_app/telemetry_live.py`.
+  same approach as `companion_app/telemetry_live.py`. `protocol.js` already
+  has `buildTelemetryPacket()` ready for this.
 - **Phase 4 — ride stats & navigation**: live speed/distance/ETA,
   off-route detection, upcoming-turn cues.
 - **Phase 5 — history**: save completed rides, GPX export, saved/favorite
