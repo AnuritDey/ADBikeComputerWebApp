@@ -1,13 +1,22 @@
 /**
- * Route fetching via OSRM's public demo server.
+ * Route fetching via the FOSSGIS-sponsored public OSRM server.
  *
- * Endpoint docs: https://github.com/Project-OSRM/osrm-backend/wiki/Demo-server
- * Usage policy: max ~1 request/sec, personal/non-commercial use only, no
- * uptime guarantee. That's fine for planning your own rides -- if you
- * outgrow it (heavier use, need it to work when this server is down),
- * self-host OSRM and change OSRM_BASE below to point at your own instance.
+ * NOTE: this is deliberately NOT router.project-osrm.org. That server
+ * (OSRM's original demo instance) only ever runs the car/driving profile
+ * -- it accepts "bike" or "foot" in the URL without validating it and
+ * silently serves a car route anyway, no error. Confirmed by OSRM's own
+ * maintainers: https://github.com/Project-OSRM/osrm-backend/issues/4034
+ *
+ * routing.openstreetmap.de runs car/bike/foot as genuinely separate
+ * backend instances, selected via the routed-{profile} path segment --
+ * the /driving/ later in the URL is just the fixed OSRM API mode-word and
+ * doesn't need to change per profile. Info: https://routing.openstreetmap.de/about.html
+ *
+ * Usage policy: personal/light use, run by a volunteer org (FOSSGIS), no
+ * published rate limit or uptime guarantee. Fine for planning your own
+ * rides -- if you outgrow it, self-host OSRM and change OSRM_BASE below.
  */
-const OSRM_BASE = 'https://router.project-osrm.org/route/v1/bike';
+const OSRM_BASE = 'https://routing.openstreetmap.de/routed-bike/route/v1/driving';
 
 /**
  * @param {{lat: number, lon: number}} start
