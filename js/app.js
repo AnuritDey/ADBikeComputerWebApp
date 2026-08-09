@@ -26,7 +26,11 @@ let currentRoute = null; // { coordinates, distanceM, durationS } once planned
 let toastTimer = null;
 let currentFrame = null;     // local frame for this route
 let telemetryWatchId = null; // geolocation watch handle
-let lastFix = null;          // { lat, lon } of previous GPS fix
+let lastFix = null;
+let sending = false;        // NEW — in-flight BLE write guard
+let smoothedHeading = null; // NEW — for heading smoothing
+let wakeLock = null;        // NEW — screen wake lock handle
+
 
 const ble = new BleConnection();
 ble.onDisconnected = () => {
@@ -165,6 +169,8 @@ sendBtn.addEventListener('click', async () => {
   }
 }
 );
+
+
 function computeBearing(fromLat, fromLon, toLat, toLon) {
   const φ1 = (fromLat * Math.PI) / 180;
   const φ2 = (toLat * Math.PI) / 180;
@@ -176,6 +182,23 @@ function computeBearing(fromLat, fromLon, toLat, toLon) {
   let deg = (Math.atan2(y, x) * 180) / Math.PI;
   if (deg < 0) deg += 360;
   return deg;
+}
+
+function smoothBearing(newHeading) {
+  if (smoothedHeading === null) { smoothedHeading = newHeading; return newHeading; }
+  const diff = ((newHeading - smoothedHeading + 540) % 360) - 180;
+  smoothedHeading = (smoothedHeading + 0.3 * diff + 360) % 360;
+  return smoothedHeading;
+}
+
+// NEW
+async function requestWakeLock() {
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch (err) {
+    console.warn('Wake lock failed:', err);
+  }
 }
 
 async function startTelemetry() {
@@ -192,29 +215,40 @@ async function startTelemetry() {
     return;
   }
 
-  statusEl.textContent = 'Live GPS: starting\u2026';
+  statusEl.textContent = 'Live GPS: starting…';
   statusEl.classList.add('is-live');
   lastFix = null;
+  smoothedHeading = null;   // NEW — reset from any previous ride
   startRideBtn.disabled = true;
   stopRideBtn.disabled = false;
 
+  await requestWakeLock();  // NEW — must come after button state, before watchPosition
+
   telemetryWatchId = navigator.geolocation.watchPosition(
     async (pos) => {
-      const lat = pos.coords.latitude;
-      const lon = pos.coords.longitude;
-      const { x, y } = currentFrame.toLocal(lat, lon);
-
-      const headingDeg = lastFix
-        ? computeBearing(lastFix.lat, lastFix.lon, lat, lon)
-        : 0;
-      lastFix = { lat, lon };
-
+      if (sending) return;              // NEW — rate-limit guard, first line in callback
+      sending = true;
       try {
+        if (pos.coords.accuracy > 25) { // NEW — accuracy filter, right after entering try
+          statusEl.textContent = `Live GPS: weak fix (±${Math.round(pos.coords.accuracy)}m)`;
+          return;
+        }
+
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        const { x, y } = currentFrame.toLocal(lat, lon);
+
+        const rawHeading = lastFix ? computeBearing(lastFix.lat, lastFix.lon, lat, lon) : 0;
+        const headingDeg = lastFix ? smoothBearing(rawHeading) : 0; // NEW — smoothing applied here
+        lastFix = { lat, lon };
+
         await ble.sendTelemetry(x, y, headingDeg);
-        statusEl.textContent = 'Live GPS: streaming\u2026';
+        statusEl.textContent = 'Live GPS: streaming…';
       } catch (err) {
         console.error(err);
         statusEl.textContent = 'Live GPS: send error';
+      } finally {
+        sending = false;                // NEW — always release the guard
       }
     },
     (err) => {
@@ -226,14 +260,19 @@ async function startTelemetry() {
   );
 }
 
-function stopTelemetry() {
+async function stopTelemetry() {
   if (telemetryWatchId !== null) {
     navigator.geolocation.clearWatch(telemetryWatchId);
     telemetryWatchId = null;
   }
+  if (wakeLock) {                 // NEW
+    await wakeLock.release();
+    wakeLock = null;
+  }
   statusEl.textContent = 'Live GPS: stopped';
   statusEl.classList.remove('is-live');
   lastFix = null;
+  smoothedHeading = null;         // NEW — reset alongside lastFix
   startRideBtn.disabled = false;
   stopRideBtn.disabled = true;
 }
