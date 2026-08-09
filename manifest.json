@@ -1,0 +1,9 @@
+{
+  "name": "Bike Nav",
+  "short_name": "BikeNav",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0A0D10",
+  "theme_color": "#0A0D10",
+  "orientation": "portrait"
+}
