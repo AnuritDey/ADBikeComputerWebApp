@@ -39,6 +39,31 @@ the phone) will pause geolocation updates and likely drop the BLE
 connection -- keep the phone mounted and the screen on during a ride
 until a background-friendly approach is worth the added complexity.
 
+### Known rough edges and how they're handled
+
+- **First connection attempt sometimes fails.** ESP32 NimBLE peripherals
+  are commonly flaky on the very first GATT connection after a boot or a
+  prior session -- a widely-reported class of issue, not specific to
+  this firmware. `ble.js` retries automatically (4 attempts, with
+  increasing backoff and a clean disconnect between tries) before giving
+  up, so this should mostly be invisible now. If it still fails after
+  all 4 attempts, the likely remaining cause is Android's cached BLE
+  service data for this device going stale -- especially common right
+  after reflashing the firmware, since the underlying GATT handles can
+  change even though the UUIDs stay the same. Fix: open
+  `chrome://bluetooth-internals/#devices` in Chrome, find `M5Stack_Nav`,
+  and remove it, or toggle Bluetooth off/on. No firmware change needed
+  for this.
+- **"Timeout expired" / GPS never gets a fix.** `enableHighAccuracy: true`
+  requires an actual GPS-chip fix, not just WiFi/cell positioning --
+  cold-start acquisition (first fix after not using GPS for a while) can
+  easily take 10-20+ seconds, and indoors it may not resolve at all
+  regardless of how long you wait, since GPS signals don't penetrate most
+  buildings. The watch timeout is set to 20s to give real fixes room to
+  arrive; if you're still seeing repeated timeouts, test outdoors or
+  right next to a window first, to rule out "no GPS signal available
+  here at all" before assuming it's a code problem.
+
 ## Running it
 
 You cannot just double-click `index.html` and open it as a `file://`

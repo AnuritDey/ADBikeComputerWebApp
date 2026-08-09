@@ -31,6 +31,7 @@ let lastFix = null;
 let sending = false;        // in-flight BLE write guard, drop a fix rather than queue it
 let smoothedHeading = null; // exponential heading smoothing state
 let wakeLock = null;        // screen wake lock handle, held while a ride is active
+let lastGeoErrorCode = null; // last geolocation error code shown, to avoid re-toasting the same error every retry
 
 const ble = new BleConnection();
 ble.onDisconnected = () => {
@@ -215,6 +216,7 @@ async function startTelemetry() {
   rideStatusEl.textContent = 'Live GPS: starting\u2026';
   lastFix = null;
   smoothedHeading = null;   // reset from any previous ride
+  lastGeoErrorCode = null;
   startRideBtn.disabled = true;
   stopRideBtn.disabled = false;
   sendBtn.disabled = true;  // avoid an accidental resend interrupting the M5Stack mid-ride
@@ -241,6 +243,7 @@ async function startTelemetry() {
 
         await ble.sendTelemetry(x, y, headingDeg);
         rideStatusEl.textContent = 'Live GPS: streaming\u2026';
+        lastGeoErrorCode = null; // a good fix arrived -- clear any earlier error state
       } catch (err) {
         console.error(err);
         rideStatusEl.textContent = 'Live GPS: send error';
@@ -250,11 +253,34 @@ async function startTelemetry() {
     },
     (err) => {
       console.error(err);
-      showToast(err.message || 'GPS error while riding.', true);
-      rideStatusEl.textContent = 'Live GPS: error';
+      // GeolocationPositionError fires repeatedly while no fix is available
+      // (e.g. every ~20s here) -- only toast once per distinct error type so
+      // it doesn't spam the screen the whole time you're waiting for a fix.
+      if (err.code !== lastGeoErrorCode) {
+        showToast(geolocationErrorMessage(err), true);
+        lastGeoErrorCode = err.code;
+      }
+      rideStatusEl.textContent = `Live GPS: ${geolocationErrorMessage(err)}`;
     },
-    { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
+    // enableHighAccuracy uses the GPS chip rather than WiFi/cell positioning
+    // -- necessary for real riding, but a cold-start GPS fix (especially
+    // indoors, or right after enabling location) can easily take longer
+    // than a few seconds. 20s gives it real room before reporting a timeout.
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 }
   );
+}
+
+function geolocationErrorMessage(err) {
+  switch (err.code) {
+    case err.PERMISSION_DENIED:
+      return 'Location permission denied \u2014 enable it in Chrome settings.';
+    case err.POSITION_UNAVAILABLE:
+      return 'Location unavailable right now.';
+    case err.TIMEOUT:
+      return 'Waiting for GPS signal \u2014 try moving outdoors or near a window.';
+    default:
+      return 'Location error.';
+  }
 }
 
 async function stopTelemetry() {

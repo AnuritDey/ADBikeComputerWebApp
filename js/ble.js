@@ -8,7 +8,7 @@
  * over HTTPS or localhost -- see webapp/README.md.
  */
 import { SERVICE_UUID, CHARACTERISTIC_UUID, BLE_CHUNK_SIZE, BLE_CHUNK_DELAY_MS, BLE_TRANSFER_COMPLETE_DELAY_MS } from './config.js';
-import { PacketType, buildMapPayload, buildTelemetryPacket } from './protocol.js'; // add buildTelemetryPacket
+import { PacketType, buildMapPayload, buildTelemetryPacket } from './protocol.js';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -30,6 +30,14 @@ export class BleConnection {
    * Opens the browser's device picker (must be called directly from a user
    * gesture, e.g. inside a button click handler -- Web Bluetooth refuses
    * to open the picker otherwise), connects, and caches the characteristic.
+   *
+   * The GATT connect step is retried a few times with backoff: ESP32
+   * NimBLE peripherals are commonly flaky on the very first connection
+   * attempt after (re)booting or after a prior session -- a real,
+   * widely-reported class of issue, not specific to this firmware. Retrying
+   * automatically here replaces needing to manually reload the page and
+   * try again, which is what "gives up after a few tries" looks like from
+   * the outside.
    */
   async connect() {
     if (!navigator.bluetooth) {
@@ -45,9 +53,33 @@ export class BleConnection {
       if (this.onDisconnected) this.onDisconnected();
     });
 
-    const server = await this.device.gatt.connect();
-    const service = await server.getPrimaryService(SERVICE_UUID);
-    this.characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+    const maxAttempts = 4;
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const server = await this.device.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        this.characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+        return; // success
+      } catch (err) {
+        lastError = err;
+        console.warn(`BLE connect attempt ${attempt}/${maxAttempts} failed:`, err);
+        // Don't leave a half-open connection behind before the next try --
+        // a stale in-progress connection is a plausible reason a retry
+        // would otherwise fail too.
+        if (this.device.gatt.connected) {
+          this.device.gatt.disconnect();
+        }
+        if (attempt < maxAttempts) {
+          await sleep(700 * attempt); // 700ms, 1400ms, 2100ms
+        }
+      }
+    }
+
+    throw new Error(
+      `Could not connect after ${maxAttempts} attempts (${lastError?.message || lastError}). ` +
+      'Try power-cycling the M5Stack.'
+    );
   }
 
   disconnect() {
@@ -88,6 +120,7 @@ export class BleConnection {
     await this._writePacket(PacketType.MAP_END);
     await sleep(BLE_TRANSFER_COMPLETE_DELAY_MS);
   }
+
   async sendTelemetry(x, y, headingDeg) {
     if (!this.isConnected) {
       throw new Error('Not connected to the bike computer.');
