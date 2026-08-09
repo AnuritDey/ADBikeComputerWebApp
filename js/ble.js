@@ -8,7 +8,7 @@
  * over HTTPS or localhost -- see webapp/README.md.
  */
 import { SERVICE_UUID, CHARACTERISTIC_UUID, BLE_CHUNK_SIZE, BLE_CHUNK_DELAY_MS, BLE_TRANSFER_COMPLETE_DELAY_MS } from './config.js';
-import { PacketType, buildMapPayload } from './protocol.js';
+import { PacketType, buildMapPayload, buildTelemetryPacket } from './protocol.js'; // add buildTelemetryPacket
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -87,5 +87,12 @@ export class BleConnection {
 
     await this._writePacket(PacketType.MAP_END);
     await sleep(BLE_TRANSFER_COMPLETE_DELAY_MS);
+  }
+  async sendTelemetry(x, y, headingDeg) {
+    if (!this.isConnected) {
+      throw new Error('Not connected to the bike computer.');
+    }
+    const packet = buildTelemetryPacket(x, y, headingDeg);
+    await this.characteristic.writeValueWithoutResponse(packet);
   }
 }

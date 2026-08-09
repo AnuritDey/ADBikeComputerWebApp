@@ -19,12 +19,18 @@ const locateBtn = document.getElementById('locate-btn');
 const toastEl = document.getElementById('toast');
 const sendBtn = document.getElementById('send-btn');
 const bleStatusEl = document.getElementById('ble-status');
+const startRideBtn = document.getElementById('start-ride-btn');
+const stopRideBtn = document.getElementById('stop-ride-btn');
 
 let currentRoute = null; // { coordinates, distanceM, durationS } once planned
 let toastTimer = null;
+let currentFrame = null;     // local frame for this route
+let telemetryWatchId = null; // geolocation watch handle
+let lastFix = null;          // { lat, lon } of previous GPS fix
 
 const ble = new BleConnection();
 ble.onDisconnected = () => {
+  stopTelemetry();
   bleStatusEl.textContent = 'Disconnected';
   sendBtn.textContent = 'Send to Bike Computer';
 };
@@ -93,6 +99,8 @@ planBtn.addEventListener('click', async () => {
   try {
     const route = await fetchRoute(startPoint, endPoint);
     currentRoute = route;
+    const origin = route.coordinates[0];
+    currentFrame = makeLocalFrame(origin.lat, origin.lon);
     mapController.drawRoute(route.coordinates);
     updateStats(route);
     instructionsEl.innerHTML = 'Route planned. Reset to try a different route.';
@@ -108,15 +116,21 @@ planBtn.addEventListener('click', async () => {
 });
 
 resetBtn.addEventListener('click', () => {
+  stopTelemetry();
   mapController.reset();
   currentRoute = null;
+  currentFrame = null;
   sendBtn.disabled = true;
   sendBtn.textContent = 'Send to Bike Computer';
+  startRideBtn.disabled = true;
 });
 
 locateBtn.addEventListener('click', () => {
   mapController.locateMe();
 });
+
+
+
 
 sendBtn.addEventListener('click', async () => {
   if (!currentRoute) return;
@@ -134,14 +148,14 @@ sendBtn.addEventListener('click', async () => {
     // Origin = the route's own start point, so the firmware's (0,0) lines
     // up with where you actually start riding -- same convention the
     // Python pipeline used (map_builder.py's build_main_route).
-    const origin = currentRoute.coordinates[0];
-    const frame = makeLocalFrame(origin.lat, origin.lon);
-    const localPoints = currentRoute.coordinates.map((c) => frame.toLocal(c.lat, c.lon));
+    const localPoints = currentRoute.coordinates.map((c) => currentFrame.toLocal(c.lat, c.lon));
 
     await ble.sendMap(localPoints);
 
     sendBtn.textContent = 'Sent \u2014 tap to resend';
-    showToast('Map sent \u2014 check the bike computer screen.');
+    showToast('Map sent \u2014 enable Start Ride to stream GPS.');
+
+    startRideBtn.disabled = false;
   } catch (err) {
     console.error(err);
     showToast(err.message || 'Could not send the route to the bike computer.', true);
@@ -149,4 +163,80 @@ sendBtn.addEventListener('click', async () => {
   } finally {
     sendBtn.disabled = false;
   }
-});
+}
+);
+function computeBearing(fromLat, fromLon, toLat, toLon) {
+  const φ1 = (fromLat * Math.PI) / 180;
+  const φ2 = (toLat * Math.PI) / 180;
+  const Δλ = ((toLon - fromLon) * Math.PI) / 180;
+
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) -
+            Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  let deg = (Math.atan2(y, x) * 180) / Math.PI;
+  if (deg < 0) deg += 360;
+  return deg;
+}
+
+async function startTelemetry() {
+  if (!currentRoute || !currentFrame) {
+    showToast('Plan and send a route before starting telemetry.', true);
+    return;
+  }
+  if (!ble.isConnected) {
+    showToast('Connect and send the map first.', true);
+    return;
+  }
+  if (!navigator.geolocation) {
+    showToast('Geolocation not available in this browser.', true);
+    return;
+  }
+
+  statusEl.textContent = 'Live GPS: starting\u2026';
+  statusEl.classList.add('is-live');
+  lastFix = null;
+  startRideBtn.disabled = true;
+  stopRideBtn.disabled = false;
+
+  telemetryWatchId = navigator.geolocation.watchPosition(
+    async (pos) => {
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      const { x, y } = currentFrame.toLocal(lat, lon);
+
+      const headingDeg = lastFix
+        ? computeBearing(lastFix.lat, lastFix.lon, lat, lon)
+        : 0;
+      lastFix = { lat, lon };
+
+      try {
+        await ble.sendTelemetry(x, y, headingDeg);
+        statusEl.textContent = 'Live GPS: streaming\u2026';
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'Live GPS: send error';
+      }
+    },
+    (err) => {
+      console.error(err);
+      showToast(err.message || 'GPS error while riding.', true);
+      statusEl.textContent = 'Live GPS: error';
+    },
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
+  );
+}
+
+function stopTelemetry() {
+  if (telemetryWatchId !== null) {
+    navigator.geolocation.clearWatch(telemetryWatchId);
+    telemetryWatchId = null;
+  }
+  statusEl.textContent = 'Live GPS: stopped';
+  statusEl.classList.remove('is-live');
+  lastFix = null;
+  startRideBtn.disabled = false;
+  stopRideBtn.disabled = true;
+}
+
+startRideBtn.addEventListener('click', startTelemetry);
+stopRideBtn.addEventListener('click', stopTelemetry);
