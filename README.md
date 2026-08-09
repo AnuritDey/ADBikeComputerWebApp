@@ -5,12 +5,32 @@ step — this is the primary path for real rides going forward; the laptop
 + Python `companion_app/` is now mainly useful as an offline dev/testing
 tool (see its README).
 
-## Current status: Phase 3 — live GPS telemetry while riding
+## Current status: Phase 3 — live GPS telemetry while riding, plus route-planning UX
 
-Full loop now works: plan a route, send it to the M5Stack, tap **Start
-Ride**, and it streams live position + heading from your phone's GPS to
-the firmware in real time, using the browser's Geolocation API
-(`navigator.geolocation.watchPosition`).
+Full loop works: plan a route (now via search or tap), send it to the
+M5Stack, tap **Start Ride**, and it streams live position + heading from
+your phone's GPS to the firmware in real time.
+
+### Route planning: search, tap, or "use my location"
+
+- **Search fields** for start/end, backed by OSM's Nominatim geocoder.
+  Type a place and press Enter or the search button -- results appear in
+  a dropdown, tap one to set that point. This is deliberately **not**
+  autocomplete-while-typing: Nominatim's usage policy explicitly forbids
+  implementing autocomplete against the public API client-side, so
+  search only fires on an explicit action. See `js/geocoding.js`.
+- **Tap the map** still works exactly as before, as a fallback --
+  whichever point is empty gets filled by the next tap.
+- **The locate button** (top-right, the target icon) finds your current
+  position, drops a "you are here" marker with an accuracy circle, pans
+  the map there, and sets it as your start point. Unlike a map tap, this
+  always overrides whatever start point was already set, since pressing
+  it is a deliberate action. It also doubles as a quick way to check
+  whether geolocation works in this browser/page at all, independent of
+  the ride-telemetry code path -- if this fails, the ride's live
+  telemetry almost certainly will too, and vice versa.
+
+### Live telemetry
 
 A few implementation details worth knowing:
 - **Heading** comes from consecutive GPS fixes (a great-circle bearing
@@ -64,6 +84,23 @@ until a background-friendly approach is worth the added complexity.
   right next to a window first, to rule out "no GPS signal available
   here at all" before assuming it's a code problem.
 
+  If Google Maps gets a fix fine in the same spot but this app still
+  times out, that's not a signal problem -- check two things: (1)
+  Android Settings -> Apps -> Chrome -> Permissions -> Location -> make
+  sure "Use precise location" is on (this is separate from the general
+  Location permission, and separate from the system-wide Location Mode
+  setting -- since Android 12, apps can be granted only "approximate"
+  location, which isn't enough for `enableHighAccuracy`, while Maps still
+  works because it also has Google Play Services' broader fallbacks).
+  (2) Use the **Test GPS** button (always available, independent of
+  route/BLE state) to see the exact permission state and fix/error
+  details without going through the whole ride flow -- useful for
+  narrowing down whether an issue is permissions, signal, or something
+  else. `startTelemetry()` also now does a one-shot `getCurrentPosition`
+  warm-up before starting the continuous `watchPosition`, since the two
+  have a known reliability gap on some Android/Chrome versions
+  independent of permissions entirely.
+
 ## Running it
 
 You cannot just double-click `index.html` and open it as a `file://`
@@ -99,10 +136,11 @@ webapp/
 ├── manifest.json       # PWA metadata (Add to Home Screen)
 ├── css/style.css        # dark instrument-panel theme, matches firmware's own look
 └── js/
-    ├── app.js            # entry point: wires DOM <-> map <-> routing <-> BLE <-> live GPS
+    ├── app.js            # entry point: wires DOM <-> map <-> routing <-> BLE <-> live GPS <-> search
     ├── config.js          # shared constants -- BLE UUIDs, COORD_SCALE (mirrors config.py/config.h)
-    ├── map.js              # Leaflet setup, tap-to-place pins, route drawing
+    ├── map.js              # Leaflet setup, tap-to-place pins, route drawing, locate-me
     ├── routing.js           # OSRM API call, no DOM/map knowledge
+    ├── geocoding.js          # Nominatim place search, explicit-trigger only (see usage policy note in the file)
     ├── geo.js                # lat/lon -> local (x,y) meters conversion
     ├── protocol.js            # binary packet encoding, ports protocol.py byte-for-byte
     └── ble.js                  # Web Bluetooth connect + chunked send + telemetry, ports ble_transport.py

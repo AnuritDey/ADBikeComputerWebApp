@@ -32,6 +32,8 @@ export function createMapController(mapElementId, { onPointsChanged } = {}) {
   let startMarker = null;
   let endMarker = null;
   let routeLine = null;
+  let currentLocationMarker = null;
+  let currentLocationCircle = null;
 
   const startIcon = L.divIcon({
     className: 'pin pin-start',
@@ -50,19 +52,36 @@ export function createMapController(mapElementId, { onPointsChanged } = {}) {
     if (onPointsChanged) onPointsChanged({ startPoint, endPoint });
   }
 
+  // Shared by map taps, search results, and "use my location" -- whichever
+  // one last set the start/end point wins, so all three stay consistent
+  // with each other rather than each keeping separate state.
+  function placeStart(lat, lon) {
+    startPoint = { lat, lon };
+    const latlng = L.latLng(lat, lon);
+    if (startMarker) startMarker.setLatLng(latlng);
+    else startMarker = L.marker(latlng, { icon: startIcon }).addTo(map);
+    notify();
+  }
+
+  function placeEnd(lat, lon) {
+    endPoint = { lat, lon };
+    const latlng = L.latLng(lat, lon);
+    if (endMarker) endMarker.setLatLng(latlng);
+    else endMarker = L.marker(latlng, { icon: endIcon }).addTo(map);
+    notify();
+  }
+
   map.on('click', (e) => {
     if (!startPoint) {
-      startPoint = { lat: e.latlng.lat, lon: e.latlng.lng };
-      startMarker = L.marker(e.latlng, { icon: startIcon }).addTo(map);
-      notify();
+      placeStart(e.latlng.lat, e.latlng.lng);
     } else if (!endPoint) {
-      endPoint = { lat: e.latlng.lat, lon: e.latlng.lng };
-      endMarker = L.marker(e.latlng, { icon: endIcon }).addTo(map);
-      notify();
+      placeEnd(e.latlng.lat, e.latlng.lng);
     }
     // Both already set: ignore further taps until Reset. Otherwise an
     // accidental tap while looking at a planned route would silently move
-    // your end pin without you noticing.
+    // your end pin without you noticing. Search results and "use my
+    // location" deliberately don't have this restriction -- see
+    // setStartPoint/setEndPoint and locateMe below.
   });
 
   function drawRoute(coordinates) {
@@ -81,14 +100,44 @@ export function createMapController(mapElementId, { onPointsChanged } = {}) {
     notify();
   }
 
-  function locateMe() {
-    map.locate({ setView: true, maxZoom: 15 });
+  /**
+   * Finds the device's current position and sets it as the start point --
+   * a deliberate action, so (unlike a map tap) this always overrides
+   * whatever start point was set before. Also drops a "you are here" dot
+   * with an accuracy-radius circle, and reports success/failure via the
+   * onFound/onError callbacks, since this doubles as a quick way to check
+   * whether geolocation is working in this browser/page at all,
+   * independent of the ride-telemetry code path.
+   */
+  function locateMe({ onFound, onError } = {}) {
+    map.once('locationfound', (e) => {
+      if (currentLocationMarker) map.removeLayer(currentLocationMarker);
+      if (currentLocationCircle) map.removeLayer(currentLocationCircle);
+
+      currentLocationMarker = L.circleMarker(e.latlng, {
+        radius: 7, color: '#fff', weight: 2, fillColor: ROUTE_COLOR, fillOpacity: 1,
+      }).addTo(map);
+      currentLocationCircle = L.circle(e.latlng, {
+        radius: e.accuracy, color: ROUTE_COLOR, weight: 1, fillOpacity: 0.08,
+      }).addTo(map);
+
+      map.setView(e.latlng, 15);
+      placeStart(e.latlng.lat, e.latlng.lng);
+
+      if (onFound) onFound(e);
+    });
+    map.once('locationerror', (e) => {
+      if (onError) onError(e);
+    });
+    map.locate({ enableHighAccuracy: true, timeout: 20000 });
   }
 
   return {
     drawRoute,
     reset,
     locateMe,
+    setStartPoint: placeStart,
+    setEndPoint: placeEnd,
     getPoints: () => ({ startPoint, endPoint }),
   };
 }

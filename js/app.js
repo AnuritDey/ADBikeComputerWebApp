@@ -7,6 +7,7 @@ import { fetchRoute } from './routing.js';
 import { createMapController } from './map.js';
 import { BleConnection } from './ble.js';
 import { makeLocalFrame } from './geo.js';
+import { searchPlace } from './geocoding.js';
 
 const instructionsEl = document.getElementById('instructions');
 const distanceEl = document.getElementById('stat-distance');
@@ -22,6 +23,14 @@ const bleStatusEl = document.getElementById('ble-status');
 const startRideBtn = document.getElementById('start-ride-btn');
 const stopRideBtn = document.getElementById('stop-ride-btn');
 const rideStatusEl = document.getElementById('ride-status');
+const testGpsBtn = document.getElementById('test-gps-btn');
+const gpsDiagnosticEl = document.getElementById('gps-diagnostic-output');
+const startSearchInput = document.getElementById('start-search-input');
+const startSearchBtn = document.getElementById('start-search-btn');
+const startSearchResults = document.getElementById('start-search-results');
+const endSearchInput = document.getElementById('end-search-input');
+const endSearchBtn = document.getElementById('end-search-btn');
+const endSearchResults = document.getElementById('end-search-results');
 
 let currentRoute = null; // { coordinates, distanceM, durationS } once planned
 let toastTimer = null;
@@ -55,10 +64,10 @@ function handlePointsChanged({ startPoint, endPoint }) {
   startRideBtn.disabled = true;
 
   if (!startPoint) {
-    instructionsEl.innerHTML = 'Tap the map to set your <strong class="text-start">start</strong> point.';
+    instructionsEl.innerHTML = 'Search, or tap the map, to set your <strong class="text-start">start</strong> point.';
     planBtn.disabled = true;
   } else if (!endPoint) {
-    instructionsEl.innerHTML = 'Tap the map to set your <strong class="text-end">end</strong> point.';
+    instructionsEl.innerHTML = 'Search, or tap the map, to set your <strong class="text-end">end</strong> point.';
     planBtn.disabled = true;
   } else {
     instructionsEl.innerHTML = 'Start and end set. Tap <strong>Plan route</strong>, or Reset to move a pin.';
@@ -131,10 +140,93 @@ resetBtn.addEventListener('click', () => {
   sendBtn.disabled = true;
   sendBtn.textContent = 'Send to Bike Computer';
   startRideBtn.disabled = true;
+  startSearchInput.value = '';
+  endSearchInput.value = '';
+  startSearchResults.hidden = true;
+  endSearchResults.hidden = true;
 });
 
 locateBtn.addEventListener('click', () => {
-  mapController.locateMe();
+  mapController.locateMe({
+    onFound: (e) => {
+      showToast(`Location found (\u00b1${Math.round(e.accuracy)}m) \u2014 set as start.`);
+    },
+    onError: (e) => {
+      showToast(e.message || 'Could not get your location.', true);
+    },
+  });
+});
+
+/**
+ * Wires one search field (input + button + results dropdown) to Nominatim.
+ * Fires only on Enter or the button -- never on 'input' -- per Nominatim's
+ * usage policy, which explicitly forbids client-side autocomplete against
+ * the public API. Shared between the start and end fields below.
+ */
+function wireSearchField({ inputEl, buttonEl, resultsEl, onSelect }) {
+  async function runSearch() {
+    const query = inputEl.value.trim();
+    if (!query) return;
+
+    buttonEl.disabled = true;
+    resultsEl.hidden = false;
+    resultsEl.innerHTML = '<li class="search-no-results">Searching\u2026</li>';
+
+    try {
+      const results = await searchPlace(query);
+      if (results.length === 0) {
+        resultsEl.innerHTML = '<li class="search-no-results">No matches \u2014 try a different search, or tap the map.</li>';
+        return;
+      }
+      resultsEl.innerHTML = '';
+      for (const result of results) {
+        const li = document.createElement('li');
+        li.className = 'search-result-item';
+        li.textContent = result.label;
+        li.tabIndex = 0;
+        li.addEventListener('click', () => {
+          onSelect(result);
+          resultsEl.hidden = true;
+          inputEl.value = result.label;
+        });
+        resultsEl.appendChild(li);
+      }
+    } catch (err) {
+      console.error(err);
+      resultsEl.innerHTML = `<li class="search-no-results">${err.message || 'Search failed.'}</li>`;
+    } finally {
+      buttonEl.disabled = false;
+    }
+  }
+
+  buttonEl.addEventListener('click', runSearch);
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runSearch();
+    }
+  });
+}
+
+wireSearchField({
+  inputEl: startSearchInput,
+  buttonEl: startSearchBtn,
+  resultsEl: startSearchResults,
+  onSelect: (result) => mapController.setStartPoint(result.lat, result.lon),
+});
+
+wireSearchField({
+  inputEl: endSearchInput,
+  buttonEl: endSearchBtn,
+  resultsEl: endSearchResults,
+  onSelect: (result) => mapController.setEndPoint(result.lat, result.lon),
+});
+
+// Close whichever results dropdown is open when tapping elsewhere on the page.
+document.addEventListener('click', (e) => {
+  for (const el of document.querySelectorAll('.search-results')) {
+    if (!el.parentElement.contains(e.target)) el.hidden = true;
+  }
 });
 
 sendBtn.addEventListener('click', async () => {
@@ -199,6 +291,46 @@ async function requestWakeLock() {
   }
 }
 
+async function handleGpsFix(pos) {
+  if (sending) return;              // rate-limit guard, first line in callback
+  sending = true;
+  try {
+    if (pos.coords.accuracy > 25) { // accuracy filter, right after entering try
+      rideStatusEl.textContent = `Live GPS: weak fix (\u00b1${Math.round(pos.coords.accuracy)}m)`;
+      return;
+    }
+
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+    const { x, y } = currentFrame.toLocal(lat, lon);
+
+    const rawHeading = lastFix ? computeBearing(lastFix.lat, lastFix.lon, lat, lon) : 0;
+    const headingDeg = lastFix ? smoothBearing(rawHeading) : 0; // smoothing applied here
+    lastFix = { lat, lon };
+
+    await ble.sendTelemetry(x, y, headingDeg);
+    rideStatusEl.textContent = 'Live GPS: streaming\u2026';
+    lastGeoErrorCode = null; // a good fix arrived -- clear any earlier error state
+  } catch (err) {
+    console.error(err);
+    rideStatusEl.textContent = 'Live GPS: send error';
+  } finally {
+    sending = false;                // always release the guard
+  }
+}
+
+function handleGpsError(err) {
+  console.error(err);
+  // GeolocationPositionError fires repeatedly while no fix is available --
+  // only toast once per distinct error type so it doesn't spam the screen
+  // the whole time you're waiting for a fix.
+  if (err.code !== lastGeoErrorCode) {
+    showToast(geolocationErrorMessage(err), true);
+    lastGeoErrorCode = err.code;
+  }
+  rideStatusEl.textContent = `Live GPS: ${geolocationErrorMessage(err)}`;
+}
+
 async function startTelemetry() {
   if (!currentRoute || !currentFrame) {
     showToast('Plan and send a route before starting telemetry.', true);
@@ -213,7 +345,7 @@ async function startTelemetry() {
     return;
   }
 
-  rideStatusEl.textContent = 'Live GPS: starting\u2026';
+  rideStatusEl.textContent = 'Live GPS: acquiring first fix\u2026';
   lastFix = null;
   smoothedHeading = null;   // reset from any previous ride
   lastGeoErrorCode = null;
@@ -223,45 +355,24 @@ async function startTelemetry() {
 
   await requestWakeLock();  // must come after button state, before watchPosition
 
+  // Warm up with a single one-shot fix before starting the continuous
+  // watch. This isn't just about speed -- on some Android/Chrome
+  // combinations, watchPosition's first callback is meaningfully less
+  // reliable than a plain getCurrentPosition call (a known class of
+  // browser quirk, independent of permissions or signal). Getting one
+  // clean fix this way first, then handing off to watchPosition for the
+  // ongoing stream, sidesteps that gap.
+  await new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => { await handleGpsFix(pos); resolve(); },
+      (err) => { handleGpsError(err); resolve(); }, // don't block the ride on one bad fix
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+    );
+  });
+
   telemetryWatchId = navigator.geolocation.watchPosition(
-    async (pos) => {
-      if (sending) return;              // rate-limit guard, first line in callback
-      sending = true;
-      try {
-        if (pos.coords.accuracy > 25) { // accuracy filter, right after entering try
-          rideStatusEl.textContent = `Live GPS: weak fix (\u00b1${Math.round(pos.coords.accuracy)}m)`;
-          return;
-        }
-
-        const lat = pos.coords.latitude;
-        const lon = pos.coords.longitude;
-        const { x, y } = currentFrame.toLocal(lat, lon);
-
-        const rawHeading = lastFix ? computeBearing(lastFix.lat, lastFix.lon, lat, lon) : 0;
-        const headingDeg = lastFix ? smoothBearing(rawHeading) : 0; // smoothing applied here
-        lastFix = { lat, lon };
-
-        await ble.sendTelemetry(x, y, headingDeg);
-        rideStatusEl.textContent = 'Live GPS: streaming\u2026';
-        lastGeoErrorCode = null; // a good fix arrived -- clear any earlier error state
-      } catch (err) {
-        console.error(err);
-        rideStatusEl.textContent = 'Live GPS: send error';
-      } finally {
-        sending = false;                // always release the guard
-      }
-    },
-    (err) => {
-      console.error(err);
-      // GeolocationPositionError fires repeatedly while no fix is available
-      // (e.g. every ~20s here) -- only toast once per distinct error type so
-      // it doesn't spam the screen the whole time you're waiting for a fix.
-      if (err.code !== lastGeoErrorCode) {
-        showToast(geolocationErrorMessage(err), true);
-        lastGeoErrorCode = err.code;
-      }
-      rideStatusEl.textContent = `Live GPS: ${geolocationErrorMessage(err)}`;
-    },
+    handleGpsFix,
+    handleGpsError,
     // enableHighAccuracy uses the GPS chip rather than WiFi/cell positioning
     // -- necessary for real riding, but a cold-start GPS fix (especially
     // indoors, or right after enabling location) can easily take longer
@@ -302,3 +413,54 @@ async function stopTelemetry() {
 
 startRideBtn.addEventListener('click', startTelemetry);
 stopRideBtn.addEventListener('click', stopTelemetry);
+testGpsBtn.addEventListener('click', runGpsDiagnostic);
+
+/**
+ * Standalone GPS diagnostic, independent of route/BLE state -- isolates
+ * "is the browser's geolocation actually working here, with these
+ * permissions" from everything else in the app. Reports the raw
+ * Permissions API state plus either a real fix (with accuracy/heading/
+ * speed) or the exact error code, so a failure here points at browser/OS
+ * permissions specifically rather than anything in the BLE or route code.
+ */
+async function runGpsDiagnostic() {
+  const lines = [];
+  gpsDiagnosticEl.hidden = false;
+  gpsDiagnosticEl.textContent = 'Checking permission state\u2026';
+
+  if (navigator.permissions?.query) {
+    try {
+      const status = await navigator.permissions.query({ name: 'geolocation' });
+      lines.push(`Permission state: ${status.state}`);
+    } catch (err) {
+      lines.push(`Permission query failed: ${err.message}`);
+    }
+  } else {
+    lines.push('Permissions API not available in this browser.');
+  }
+
+  lines.push('Requesting a GPS fix (up to 20s)\u2026');
+  gpsDiagnosticEl.textContent = lines.join('\n');
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const c = pos.coords;
+      lines.push('--- Fix received ---');
+      lines.push(`lat: ${c.latitude.toFixed(6)}`);
+      lines.push(`lon: ${c.longitude.toFixed(6)}`);
+      lines.push(`accuracy: \u00b1${Math.round(c.accuracy)}m`);
+      lines.push(`heading: ${c.heading ?? 'null (not moving, or unsupported)'}`);
+      lines.push(`speed: ${c.speed ?? 'null'}`);
+      lines.push(`fix age: ${Math.round((Date.now() - pos.timestamp) / 1000)}s`);
+      gpsDiagnosticEl.textContent = lines.join('\n');
+    },
+    (err) => {
+      const codeName = ['UNKNOWN', 'PERMISSION_DENIED', 'POSITION_UNAVAILABLE', 'TIMEOUT'][err.code] || 'UNKNOWN';
+      lines.push('--- Error ---');
+      lines.push(`code: ${err.code} (${codeName})`);
+      lines.push(`message: ${err.message}`);
+      gpsDiagnosticEl.textContent = lines.join('\n');
+    },
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+  );
+}

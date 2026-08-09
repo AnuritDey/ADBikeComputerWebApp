@@ -153,6 +153,78 @@ html, body {
   margin: 0 auto 12px;
 }
 
+.search-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.search-field {
+  position: relative;
+  display: flex;
+  gap: 6px;
+}
+.search-input {
+  flex: 1;
+  min-width: 0; /* let it shrink -- otherwise a long value can force the row to overflow */
+  height: 40px;
+  padding: 0 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+}
+.search-input::placeholder { color: var(--text-muted); }
+.search-input:focus { outline: none; border-color: var(--accent-route); }
+.search-btn {
+  width: 40px; height: 40px;
+  flex-shrink: 0;
+  display: grid; place-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 16px;
+  cursor: pointer;
+}
+.search-btn:disabled { color: var(--text-muted); cursor: not-allowed; }
+.search-btn:focus-visible { outline: 2px solid var(--accent-route); outline-offset: 2px; }
+.search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 46px; /* leave room matching the search button's width + gap */
+  z-index: 10;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.search-result-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.search-result-item:hover, .search-result-item:focus {
+  background: var(--surface);
+  outline: none;
+}
+.search-no-results {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 .instructions {
   margin: 0 0 14px;
   font-size: 14px;
@@ -298,6 +370,28 @@ html, body {
   color: var(--text-muted);
   text-align: center;
   min-height: 14px; /* reserve the line so the layout doesn't jump as status text appears */
+}
+
+.diagnostic-row {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.diagnostic-output {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
 }
 
 @media (min-width: 640px) {

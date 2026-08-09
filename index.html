@@ -28,8 +28,23 @@
   <section class="sheet" id="sheet">
     <div class="sheet-grip"></div>
 
+    <div class="search-row">
+      <div class="search-field">
+        <input type="search" id="start-search-input" class="search-input"
+               placeholder="Search start location" autocomplete="off" enterkeyhint="search">
+        <button id="start-search-btn" class="search-btn" type="button" aria-label="Search start location">&#128269;</button>
+        <ul class="search-results" id="start-search-results" hidden></ul>
+      </div>
+      <div class="search-field">
+        <input type="search" id="end-search-input" class="search-input"
+               placeholder="Search end location" autocomplete="off" enterkeyhint="search">
+        <button id="end-search-btn" class="search-btn" type="button" aria-label="Search end location">&#128269;</button>
+        <ul class="search-results" id="end-search-results" hidden></ul>
+      </div>
+    </div>
+
     <p class="instructions" id="instructions">
-      Tap the map to set your <strong class="text-start">start</strong> point.
+      Search, or tap the map, to set your <strong class="text-start">start</strong> point.
     </p>
 
     <div class="telemetry-strip" id="telemetry-strip">
@@ -66,6 +81,11 @@
         <button id="stop-ride-btn" class="btn btn-danger" disabled>Stop Ride</button>
       </div>
       <span class="ride-status" id="ride-status"></span>
+    </div>
+
+    <div class="diagnostic-row">
+      <button id="test-gps-btn" class="btn btn-ghost">Test GPS</button>
+      <pre class="diagnostic-output" id="gps-diagnostic-output" hidden></pre>
     </div>
   </section>
 
