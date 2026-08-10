@@ -246,8 +246,6 @@ sendBtn.addEventListener('click', async () => {
     // up with where you actually start riding -- same convention the
     // Python pipeline used (map_builder.py's build_main_route).
     const localPoints = currentRoute.coordinates.map((c) => currentFrame.toLocal(c.lat, c.lon));
-    
-    // alert('Route origin: ' + currentFrame.originLat.toFixed(7) + ', ' + currentFrame.originLon.toFixed(7));
 
     await ble.sendMap(localPoints);
 

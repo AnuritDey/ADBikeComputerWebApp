@@ -25,8 +25,6 @@ export function makeLocalFrame(originLat, originLon) {
   const metersPerDegLon = (Math.PI / 180) * EARTH_RADIUS_M * Math.cos(originLatRad);
 
   return {
-    originLat,
-    originLon,
     toLocal(lat, lon) {
       return {
         x: (lon - originLon) * metersPerDegLon,
