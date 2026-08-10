@@ -247,7 +247,7 @@ sendBtn.addEventListener('click', async () => {
     // Python pipeline used (map_builder.py's build_main_route).
     const localPoints = currentRoute.coordinates.map((c) => currentFrame.toLocal(c.lat, c.lon));
     
-    // console.log('Route origin:', origin.lat.toFixed(7), origin.lon.toFixed(7));
+    console.log('Route origin:', origin.lat.toFixed(7), origin.lon.toFixed(7));
     
     await ble.sendMap(localPoints);
 
