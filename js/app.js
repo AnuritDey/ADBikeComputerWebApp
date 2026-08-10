@@ -247,7 +247,8 @@ sendBtn.addEventListener('click', async () => {
     // Python pipeline used (map_builder.py's build_main_route).
     const localPoints = currentRoute.coordinates.map((c) => currentFrame.toLocal(c.lat, c.lon));
     
-    console.log('Route origin:', currentFrame.originLat.toFixed(7), currentFrame.originLon.toFixed(7));
+    alert('Route origin: ' + currentFrame.originLat.toFixed(7) + ', ' + currentFrame.originLon.toFixed(7));
+    
     await ble.sendMap(localPoints);
 
     sendBtn.textContent = 'Sent \u2014 tap to resend';
