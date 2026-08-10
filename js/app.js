@@ -278,7 +278,18 @@ function computeBearing(fromLat, fromLon, toLat, toLon) {
 function smoothBearing(newHeading) {
   if (smoothedHeading === null) { smoothedHeading = newHeading; return newHeading; }
   const diff = ((newHeading - smoothedHeading + 540) % 360) - 180;
-  smoothedHeading = (smoothedHeading + 0.3 * diff + 360) % 360;
+
+  // Adaptive smoothing: a small diff is treated as GPS noise and eased in
+  // gently (0.3), which is what keeps heading stable during straight
+  // travel. But that same gentleness made a REAL turn take ~6-7 fixes to
+  // catch up (0.7^n residual error), which showed up as the marker
+  // drifting ~10m off for a few seconds after an actual turn before
+  // slowly correcting. A large diff is much more likely a genuine turn
+  // than noise, so react fast (0.7) instead.
+  const TURN_THRESHOLD_DEG = 30;
+  const factor = Math.abs(diff) > TURN_THRESHOLD_DEG ? 0.7 : 0.3;
+
+  smoothedHeading = (smoothedHeading + factor * diff + 360) % 360;
   return smoothedHeading;
 }
 
@@ -432,6 +443,9 @@ async function runGpsDiagnostic() {
     try {
       const status = await navigator.permissions.query({ name: 'geolocation' });
       lines.push(`Permission state: ${status.state}`);
+      if (status.state === 'prompt') {
+        lines.push('(Chrome should show a permission popup now \u2014 look for it, it can be easy to miss.)');
+      }
     } catch (err) {
       lines.push(`Permission query failed: ${err.message}`);
     }
