@@ -8,7 +8,11 @@ import { createMapController } from './map.js';
 import { BleConnection } from './ble.js';
 import { makeLocalFrame } from './geo.js';
 import { searchPlace } from './geocoding.js';
-import { REGION_ORIGIN_LAT, REGION_ORIGIN_LON } from './config.js';
+import { distanceToRoute, nearestRouteIndex } from './offroute.js';
+import {
+  REGION_ORIGIN_LAT, REGION_ORIGIN_LON,
+  OFF_ROUTE_THRESHOLD_M, OFF_ROUTE_CONFIRM_SECONDS, REROUTE_COOLDOWN_SECONDS,
+} from './config.js';
 
 const instructionsEl = document.getElementById('instructions');
 const distanceEl = document.getElementById('stat-distance');
@@ -42,6 +46,15 @@ let sending = false;        // in-flight BLE write guard, drop a fix rather than
 let smoothedHeading = null; // exponential heading smoothing state
 let wakeLock = null;        // screen wake lock handle, held while a ride is active
 let lastGeoErrorCode = null; // last geolocation error code shown, to avoid re-toasting the same error every retry
+
+// Auto-reroute state. currentRouteLocalPoints is kept separate from
+// currentRoute.coordinates (lat/lon) -- distanceToRoute() works in the
+// same local (x,y) meters space telemetry already uses, so this is
+// precomputed once per (re)route rather than reprojected on every fix.
+let currentRouteLocalPoints = null;
+let offRouteSinceMs = null;   // when sustained off-route condition started, null if currently on-route
+let isRerouting = false;
+let rerouteCooldownUntilMs = 0;
 
 const ble = new BleConnection();
 ble.onDisconnected = () => {
@@ -138,6 +151,10 @@ resetBtn.addEventListener('click', () => {
   mapController.reset();
   currentRoute = null;
   currentFrame = null;
+  currentRouteLocalPoints = null;
+  offRouteSinceMs = null;
+  isRerouting = false;
+  rerouteCooldownUntilMs = 0;
   sendBtn.disabled = true;
   sendBtn.textContent = 'Send to Bike Computer';
   startRideBtn.disabled = true;
@@ -230,6 +247,82 @@ document.addEventListener('click', (e) => {
   }
 });
 
+/**
+ * Sends `route` as the map payload and updates currentRouteLocalPoints to
+ * match -- shared by the manual Send button and triggerReroute(), so both
+ * paths stay consistent. Deliberately does NOT touch the BLE connection
+ * or send an ORIGIN packet -- callers handle connecting themselves, and
+ * a reroute reuses the ride's existing currentFrame/origin rather than
+ * resetting it (the origin is the ride's local coordinate frame, not
+ * something that needs to change just because the route did).
+ */
+async function sendMapPayload(route) {
+  const localPoints = route.coordinates.map((c) => currentFrame.toLocal(c.lat, c.lon));
+  await ble.sendMap(localPoints);
+  currentRouteLocalPoints = localPoints;
+}
+
+/**
+ * Fetches a new route from the current position to the ORIGINAL
+ * destination (the last point of whatever route was planned/rerouted
+ * most recently) and uploads it, reusing the existing BLE connection and
+ * coordinate frame. Called after a sustained off-route condition -- see
+ * checkForReroute().
+ */
+async function triggerReroute(currentLat, currentLon) {
+  if (!currentRoute || !currentFrame || !ble.isConnected || isRerouting) return;
+
+  isRerouting = true;
+  rideStatusEl.textContent = 'Off route \u2014 recalculating\u2026';
+  showToast('Off route \u2014 recalculating a new path\u2026');
+
+  try {
+    const destination = currentRoute.coordinates[currentRoute.coordinates.length - 1];
+    const newRoute = await fetchRoute({ lat: currentLat, lon: currentLon }, destination);
+
+    currentRoute = newRoute;
+    mapController.drawRoute(newRoute.coordinates, { fitBounds: false });
+    updateStats(newRoute);
+
+    await sendMapPayload(newRoute);
+
+    showToast('New route sent to the bike computer.');
+  } catch (err) {
+    console.error(err);
+    showToast('Could not calculate a new route: ' + (err.message || 'route request failed'), true);
+  } finally {
+    isRerouting = false;
+    rerouteCooldownUntilMs = Date.now() + REROUTE_COOLDOWN_SECONDS * 1000;
+  }
+}
+
+/**
+ * Checks live position against the current route and triggers
+ * triggerReroute() once it's been continuously off-route for
+ * OFF_ROUTE_CONFIRM_SECONDS -- not on a single reading, since GPS/heading
+ * noise briefly reads as "off route" near turns even when genuinely on
+ * the planned path (confirmed directly during this project's walking
+ * test). Call this from handleGpsFix, after the existing accuracy
+ * filter, so a weak fix can't trigger it either.
+ */
+function checkForReroute(lat, lon, x, y) {
+  if (!currentRouteLocalPoints || isRerouting) return;
+  if (Date.now() < rerouteCooldownUntilMs) return;
+
+  const dist = distanceToRoute(currentRouteLocalPoints, x, y);
+
+  if (dist > OFF_ROUTE_THRESHOLD_M) {
+    if (offRouteSinceMs === null) {
+      offRouteSinceMs = Date.now();
+    } else if (Date.now() - offRouteSinceMs >= OFF_ROUTE_CONFIRM_SECONDS * 1000) {
+      offRouteSinceMs = null;
+      triggerReroute(lat, lon); // fire-and-forget -- don't block the telemetry loop on the OSRM round-trip
+    }
+  } else {
+    offRouteSinceMs = null; // back within threshold -- reset the sustained timer
+  }
+}
+
 sendBtn.addEventListener('click', async () => {
   if (!currentRoute) return;
 
@@ -246,9 +339,7 @@ sendBtn.addEventListener('click', async () => {
     // Origin = the route's own start point, so the firmware's (0,0) lines
     // up with where you actually start riding -- same convention the
     // Python pipeline used (map_builder.py's build_main_route).
-    const localPoints = currentRoute.coordinates.map((c) => currentFrame.toLocal(c.lat, c.lon));
-
-    await ble.sendMap(localPoints);
+    await sendMapPayload(currentRoute);
 
     // Also tell the firmware where this route's origin sits in the fixed
     // whole-region frame, so it can work out which SD grid cell(s) to
@@ -333,6 +424,19 @@ async function handleGpsFix(pos) {
     await ble.sendTelemetry(x, y, headingDeg);
     rideStatusEl.textContent = 'Live GPS: streaming\u2026';
     lastGeoErrorCode = null; // a good fix arrived -- clear any earlier error state
+
+    // Passive map feedback -- see map.js's updateLivePosition/
+    // updateRouteProgress docs for why this stays simple on purpose
+    // (no auto-pan, no second navigation UI): just a marker plus a
+    // dimmed "already covered" overlay on the existing route line.
+    mapController.updateLivePosition(lat, lon, pos.coords.accuracy);
+    if (currentRouteLocalPoints && currentRoute) {
+      const traveledIdx = nearestRouteIndex(currentRouteLocalPoints, x, y);
+      const traveledLatLngs = currentRoute.coordinates.slice(0, traveledIdx + 1).map((c) => [c.lat, c.lon]);
+      mapController.updateRouteProgress(traveledLatLngs);
+    }
+
+    checkForReroute(lat, lon, x, y);
   } catch (err) {
     console.error(err);
     rideStatusEl.textContent = 'Live GPS: send error';
@@ -428,6 +532,7 @@ async function stopTelemetry() {
   rideStatusEl.textContent = 'Live GPS: stopped';
   lastFix = null;
   smoothedHeading = null;         // reset alongside lastFix
+  offRouteSinceMs = null;         // stop tracking sustained off-route -- no point mid-stop
   startRideBtn.disabled = false;
   stopRideBtn.disabled = true;
   sendBtn.disabled = false;
