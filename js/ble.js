@@ -105,7 +105,7 @@ export class BleConnection {
       throw new Error('Not connected to the bike computer.');
     }
 
-    const payload = buildMapPayload(routePoints, []);
+    const payload = buildMapPayload(routePoints);
 
     await this._writePacket(PacketType.MAP_START, payload.slice(0, BLE_CHUNK_SIZE));
     await sleep(BLE_CHUNK_DELAY_MS);
