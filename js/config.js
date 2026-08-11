@@ -13,6 +13,15 @@ export const DEVICE_NAME = 'M5Stack_Nav';
 // config.py / firmware/config.h, or positions will decode to the wrong meters.
 export const COORD_SCALE = 2.0;
 
+// The one fixed reference point the whole-region SD grid is built around --
+// must be byte-for-byte identical to map_tools/generate_region_grid.py's
+// REGION_ORIGIN_LAT/LON. Every route's origin gets expressed as an offset
+// from this point (see app.js's ORIGIN packet), so the firmware can work
+// out which SD grid cell(s) it's currently near without ever parsing
+// lat/lon itself.
+export const REGION_ORIGIN_LAT = 60.1699;  // matches map.js's DEFAULT_CENTER
+export const REGION_ORIGIN_LON = 24.9384;
+
 // BLE chunked-transfer tuning -- mirrors BLE_CHUNK_SIZE / BLE_CHUNK_DELAY_S
 // in companion_app/config.py.
 export const BLE_CHUNK_SIZE = 100;

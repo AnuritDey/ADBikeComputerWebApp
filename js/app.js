@@ -8,6 +8,7 @@ import { createMapController } from './map.js';
 import { BleConnection } from './ble.js';
 import { makeLocalFrame } from './geo.js';
 import { searchPlace } from './geocoding.js';
+import { REGION_ORIGIN_LAT, REGION_ORIGIN_LON } from './config.js';
 
 const instructionsEl = document.getElementById('instructions');
 const distanceEl = document.getElementById('stat-distance');
@@ -248,6 +249,16 @@ sendBtn.addEventListener('click', async () => {
     const localPoints = currentRoute.coordinates.map((c) => currentFrame.toLocal(c.lat, c.lon));
 
     await ble.sendMap(localPoints);
+
+    // Also tell the firmware where this route's origin sits in the fixed
+    // whole-region frame, so it can work out which SD grid cell(s) to
+    // load as you move (see map_tools/generate_region_grid.py). This is
+    // a separate, tiny packet -- not part of the route payload itself --
+    // because it has a different job: the route is static once uploaded,
+    // this offset is what lets the *area context* stay dynamic as you ride.
+    const regionFrame = makeLocalFrame(REGION_ORIGIN_LAT, REGION_ORIGIN_LON);
+    const originAbs = regionFrame.toLocal(currentFrame.originLat, currentFrame.originLon);
+    await ble.sendOrigin(originAbs.x, originAbs.y);
 
     sendBtn.textContent = 'Sent \u2014 tap to resend';
     showToast('Map sent \u2014 enable Start Ride to stream GPS.');

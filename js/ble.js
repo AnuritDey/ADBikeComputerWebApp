@@ -8,7 +8,7 @@
  * over HTTPS or localhost -- see webapp/README.md.
  */
 import { SERVICE_UUID, CHARACTERISTIC_UUID, BLE_CHUNK_SIZE, BLE_CHUNK_DELAY_MS, BLE_TRANSFER_COMPLETE_DELAY_MS } from './config.js';
-import { PacketType, buildMapPayload, buildTelemetryPacket } from './protocol.js';
+import { PacketType, buildMapPayload, buildTelemetryPacket, buildOriginPacket } from './protocol.js';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -126,6 +126,20 @@ export class BleConnection {
       throw new Error('Not connected to the bike computer.');
     }
     const packet = buildTelemetryPacket(x, y, headingDeg);
+    await this.characteristic.writeValueWithoutResponse(packet);
+  }
+
+  /**
+   * Tells the firmware where this route's origin sits in the fixed
+   * region-wide frame (see geo.js), so it can work out which SD grid
+   * cell(s) to load as telemetry moves -- send once per route upload,
+   * after sendMap().
+   */
+  async sendOrigin(absX, absY) {
+    if (!this.isConnected) {
+      throw new Error('Not connected to the bike computer.');
+    }
+    const packet = buildOriginPacket(absX, absY);
     await this.characteristic.writeValueWithoutResponse(packet);
   }
 }

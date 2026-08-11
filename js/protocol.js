@@ -22,11 +22,19 @@ export const PacketType = Object.freeze({
   TELEMETRY: 0x02,
   MAP_CHUNK: 0x03,
   MAP_END: 0x04,
+  ORIGIN: 0x05,
 });
 
 // 1 header byte + 3x float32 (x, y, heading_deg) -- used once phase 3 (live
 // telemetry) lands; included now so protocol.js fully mirrors protocol.py.
 export const TELEMETRY_PACKET_SIZE = 13;
+
+// 1 header byte + 2x float32 (absX, absY) -- the uploaded route's own
+// origin, expressed as an offset from the fixed REGION_ORIGIN_LAT/LON
+// (see geo.js). Sent once per route upload so the firmware can work out
+// which SD grid cell(s) it's near from telemetry alone, without ever
+// parsing lat/lon itself.
+export const ORIGIN_PACKET_SIZE = 9;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -98,5 +106,15 @@ export function buildTelemetryPacket(x, y, headingDeg) {
   view.setFloat32(1, x, true);
   view.setFloat32(5, y, true);
   view.setFloat32(9, headingDeg, true);
+  return new Uint8Array(buf);
+}
+
+/** [0x05][absX:f32][absY:f32] = 9 bytes, little-endian. */
+export function buildOriginPacket(absX, absY) {
+  const buf = new ArrayBuffer(ORIGIN_PACKET_SIZE);
+  const view = new DataView(buf);
+  view.setUint8(0, PacketType.ORIGIN);
+  view.setFloat32(1, absX, true);
+  view.setFloat32(5, absY, true);
   return new Uint8Array(buf);
 }
